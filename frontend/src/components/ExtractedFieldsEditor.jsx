@@ -69,7 +69,7 @@ export default function ExtractedFieldsEditor({ data, onSaveSuccess }) {
         if (onSaveSuccess) onSaveSuccess();
       }, 1500);
     } catch (err) {
-      logger.error("Failed to save corrections", err);
+      console.error("Failed to save corrections", err);
       setSaveStatus("error");
       setErrorMessage(err.response?.data?.detail || "Could not connect to API server.");
     } finally {

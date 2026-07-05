@@ -7,6 +7,8 @@ __pycache__/
 backend/venv/
 backend/env/
 backend/.env
+backend/.cognee_data/
+backend/.cognee_system/
 
 # Node.js modules and builds
 frontend/node_modules/

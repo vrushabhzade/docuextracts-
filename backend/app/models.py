@@ -45,3 +45,9 @@ class HistoryResponseItem(BaseModel):
     s3_image_key: str
     created_at: str
     image_url: Optional[str] = None
+
+class SearchRequest(BaseModel):
+    query: str
+
+class SearchResponse(BaseModel):
+    results: List[str]

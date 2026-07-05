@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -9,7 +10,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.0-flash"
     
     # LLM Provider Configuration ("gemini" or "ollama")
-    LLM_PROVIDER: str = "gemini"
+    LLM_PROVIDER: str = Field("gemini", validation_alias=AliasChoices("DOCUEXTRACT_LLM_PROVIDER", "LLM_PROVIDER"))
     OLLAMA_API_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
     

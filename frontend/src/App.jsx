@@ -11,7 +11,10 @@ import {
   CheckCircle, 
   UserCheck, 
   Clock, 
-  ExternalLink 
+  ExternalLink,
+  Search,
+  Compass,
+  Brain
 } from "lucide-react";
 
 export default function App() {
@@ -29,6 +32,34 @@ export default function App() {
     overall_accuracy_percentage: 100.0,
     field_accuracies: []
   });
+
+  // Semantic Search states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+
+  const handleSearch = async (e) => {
+    if (e) e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    setSearchError(null);
+    setSearchResults([]);
+
+    try {
+      const res = await apiClient.post("/api/search", { query: searchQuery });
+      setSearchResults(res.data.results || []);
+      if (!res.data.results || res.data.results.length === 0) {
+        setSearchResults(["No matching nodes or relationships found in the knowledge graph."]);
+      }
+    } catch (err) {
+      console.error("Search failed:", err);
+      setSearchError(err.response?.data?.detail || "Failed to search the Cognee knowledge graph.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   // Initial fetch on mount
   useEffect(() => {
@@ -277,6 +308,89 @@ export default function App() {
               )}
             </div>
           </div>
+        </section>
+        
+        {/* Semantic Knowledge Graph Search */}
+        <section className="glass-panel p-6 rounded-2xl border-slate-850 space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-900 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-gradient-to-tr from-indigo-600 to-purple-600 p-2.5 rounded-xl shadow-lg shadow-purple-500/10">
+                <Brain className="text-white w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+                  Cognee Semantic Search
+                </h2>
+                <p className="text-xs text-slate-500">Query the extracted knowledge graph and entity relationships semantically</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery("Who is the head of household for card number MH123456?");
+                }}
+                className="text-[11px] px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-400 rounded-lg transition-colors font-medium animate-pulse"
+              >
+                Try sample query
+              </button>
+            </div>
+          </div>
+
+          <form onSubmit={handleSearch} className="flex gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <input
+                type="text"
+                placeholder="Ask anything about the extracted document records (e.g. 'Who is the head of household?')"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 bg-slate-950/80 border border-slate-800 focus:border-indigo-500/50 rounded-xl text-slate-200 text-sm focus:outline-none transition-all placeholder:text-slate-600"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={isSearching}
+              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-indigo-800 disabled:to-purple-800 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/10 flex items-center gap-2"
+            >
+              {isSearching ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Searching...
+                </>
+              ) : (
+                <>
+                  <Compass className="w-4 h-4" />
+                  Search Graph
+                </>
+              )}
+            </button>
+          </form>
+
+          {searchError && (
+            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-medium">
+              {searchError}
+            </div>
+          )}
+
+          {searchResults.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Compass className="w-3.5 h-3.5 text-indigo-500" />
+                Knowledge Graph Responses
+              </h4>
+              <div className="space-y-2">
+                {searchResults.map((result, idx) => (
+                  <div
+                    key={idx}
+                    className="p-4 bg-slate-900/60 border border-slate-850 rounded-xl text-sm text-slate-300 leading-relaxed shadow-inner"
+                  >
+                    {result}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Extraction Editor Panel (Anchored) */}

@@ -2,7 +2,7 @@ import time
 import uuid
 import logging
 from typing import List
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -12,7 +12,16 @@ from app.extraction import extract_structured_data
 from app.validation import validate_and_enrich_fields
 from app.aws.s3_client import upload_image, generate_presigned_url
 from app.aws.dynamodb_client import save_extraction, save_correction, get_history, get_stats
-from app.models import ExtractionResponse, CorrectionRequest, StatsResponse, HistoryResponseItem, FieldDetail
+from app.models import (
+    ExtractionResponse,
+    CorrectionRequest,
+    StatsResponse,
+    HistoryResponseItem,
+    FieldDetail,
+    SearchRequest,
+    SearchResponse
+)
+from app.cognee_integration import init_cognee, ingest_document_to_cognee, search_cognee_knowledge_graph
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -32,11 +41,15 @@ for origin in ["http://localhost:5173", "http://127.0.0.1:5173", "http://localho
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    await init_cognee()
 
 @app.get("/health")
 def health_check():
@@ -45,6 +58,7 @@ def health_check():
 
 @app.post("/api/extract", response_model=ExtractionResponse)
 async def extract_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Image file of the document (JPG, PNG)"),
     document_type: str = Form(..., description="Document type: ration_card, admit_card, custom_form")
 ):
@@ -161,6 +175,15 @@ async def extract_document(
             detail=f"AWS DynamoDB failed to save document metadata: {str(e)}"
         )
         
+    # Queue Cognee ingestion in the background
+    background_tasks.add_task(
+        ingest_document_to_cognee,
+        document_id,
+        document_type,
+        validated_fields,
+        raw_ocr_text
+    )
+        
     # Map back to field response model list
     response_fields = [FieldDetail(**f) for f in validated_fields]
     
@@ -236,4 +259,19 @@ def get_extraction_statistics():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to calculate stats: {str(e)}"
+        )
+
+@app.post("/api/search", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
+    """
+    Search across all indexed document knowledge graphs semantically.
+    """
+    try:
+        results = await search_cognee_knowledge_graph(request.query)
+        return SearchResponse(results=results)
+    except Exception as e:
+        logger.error(f"Search endpoint failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Semantic Search failed: {str(e)}"
         )
