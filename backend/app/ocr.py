@@ -1,3 +1,4 @@
+import os
 import io
 import logging
 from typing import List, Dict, Any, Tuple
@@ -6,6 +7,23 @@ import pytesseract
 from pytesseract import TesseractNotFoundError, TesseractError
 
 logger = logging.getLogger(__name__)
+
+# Automatically locate and configure local Tesseract binary and data folders in workspace
+current_file_path = os.path.abspath(__file__)
+backend_dir = os.path.dirname(os.path.dirname(current_file_path))
+workspace_root = os.path.dirname(backend_dir)
+
+# Check if tesseract.exe is in the workspace root
+local_tesseract = os.path.join(workspace_root, "tesseract.exe")
+if os.path.exists(local_tesseract):
+    logger.info(f"Local Tesseract binary detected at: {local_tesseract}")
+    pytesseract.pytesseract.tesseract_cmd = local_tesseract
+    
+    # Configure TESSDATA_PREFIX to use local tessdata folder
+    local_tessdata = os.path.join(workspace_root, "tessdata")
+    if os.path.exists(local_tessdata):
+        logger.info(f"Local tessdata folder detected at: {local_tessdata}. Setting TESSDATA_PREFIX.")
+        os.environ["TESSDATA_PREFIX"] = local_tessdata
 
 def perform_ocr(image_bytes: bytes) -> Tuple[List[Dict[str, Any]], str]:
     """

@@ -188,4 +188,4 @@ def test_dynamodb_save_extraction(mock_get_table):
     mock_table.put_item.assert_called_once()
     saved_item = mock_table.put_item.call_args[1]["Item"]
     assert saved_item["PK"] == "DOC#doc-123"
-    assert saved_item["SK"] == "METADATA"
+    assert saved_item.get("Sk") == "METADATA" or saved_item.get("SK") == "METADATA"

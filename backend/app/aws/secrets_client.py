@@ -18,14 +18,13 @@ def get_gemini_api_key() -> str:
     """
     global _cached_gemini_api_key
 
-    # Return cached key if already fetched
-    if _cached_gemini_api_key is not None:
-        return _cached_gemini_api_key
-
     # Check if we are running in local/dev mode
     if settings.ENVIRONMENT != "production":
         logger.info("Using local Gemini API key from environment configuration.")
-        _cached_gemini_api_key = settings.GEMINI_API_KEY
+        return settings.GEMINI_API_KEY
+
+    # Return cached key if already fetched (production only)
+    if _cached_gemini_api_key is not None:
         return _cached_gemini_api_key
 
     # Production flow: fetch from Secrets Manager

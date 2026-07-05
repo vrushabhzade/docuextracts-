@@ -6,6 +6,12 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "local"
     ALLOWED_ORIGIN: str = "http://localhost:5173"
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    
+    # LLM Provider Configuration ("gemini" or "ollama")
+    LLM_PROVIDER: str = "gemini"
+    OLLAMA_API_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3"
     
     AWS_REGION: str = "us-east-1"
     DYNAMODB_TABLE: str = "docuextract-records"
@@ -26,4 +32,18 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-settings = Settings()
+class SettingsProxy:
+    def __init__(self):
+        self._cached_prod_settings = None
+
+    def __getattr__(self, name):
+        # In production, cache the Settings object to avoid reading the file repeatedly
+        if os.getenv("ENVIRONMENT") == "production":
+            if self._cached_prod_settings is None:
+                self._cached_prod_settings = Settings()
+            return getattr(self._cached_prod_settings, name)
+        
+        # In local development, always load the latest settings from the .env file
+        return getattr(Settings(), name)
+
+settings = SettingsProxy()

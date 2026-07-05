@@ -3,6 +3,7 @@ import json
 from typing import List, Dict, Any, Tuple, Optional, Type
 from pydantic import BaseModel
 import google.generativeai as genai
+from app.config import settings
 from app.aws.secrets_client import get_gemini_api_key
 from app.schemas.ration_card import RationCardSchema
 from app.schemas.admit_card import AdmitCardSchema
@@ -118,13 +119,90 @@ def find_bbox_and_confidence_for_value(
     # Default fallback (could not resolve bbox)
     return None, 75.0
 
+def clean_pydantic_schema_for_gemini(schema_class: Type[BaseModel]) -> genai.protos.Schema:
+    """
+    Converts a Pydantic model class into a google.generativeai.protos.Schema object
+    that is fully compatible with the Gemini API, filtering out unsupported 
+    fields like 'default' or Pydantic v2 'anyOf' union types.
+    """
+    json_schema = schema_class.model_json_schema()
+    defs = json_schema.get("$defs", {})
+    
+    def resolve_ref(ref_path: str) -> dict:
+        parts = ref_path.split("/")
+        def_name = parts[-1]
+        return defs.get(def_name, {})
+
+    def recurse(schema_part: dict) -> dict:
+        if not isinstance(schema_part, dict):
+            return schema_part
+            
+        if "$ref" in schema_part:
+            resolved = resolve_ref(schema_part["$ref"])
+            return recurse(resolved)
+            
+        if "anyOf" in schema_part:
+            non_null = [item for item in schema_part["anyOf"] if item.get("type") != "null"]
+            if non_null:
+                merged = non_null[0].copy()
+                if "description" in schema_part:
+                    merged["description"] = schema_part["description"]
+                return recurse(merged)
+            
+        result = {}
+        allowed_keys = {"type", "description", "properties", "items", "required", "enum"}
+        for k, v in schema_part.items():
+            if k in allowed_keys:
+                target_key = "type_" if k == "type" else k
+                
+                if k == "type":
+                    val = v.upper()
+                else:
+                    val = v
+
+                if k == "properties" and isinstance(v, dict):
+                    result[target_key] = {prop_name: recurse(prop_val) for prop_name, prop_val in v.items()}
+                elif k == "items" and isinstance(v, dict):
+                    result[target_key] = recurse(v)
+                else:
+                    result[target_key] = val
+        return result
+
+    cleaned_dict = recurse(json_schema)
+    return genai.protos.Schema(cleaned_dict)
+
+def clean_llm_json_response(text: str) -> str:
+    """
+    Cleans markdown formatting and extracts the first valid JSON object 
+    (from the first '{' to the last '}') from the LLM response text.
+    """
+    text = text.strip()
+    
+    # Locate the first '{' and the last '}'
+    start_idx = text.find("{")
+    end_idx = text.rfind("}")
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        return text[start_idx:end_idx + 1]
+        
+    # Fallback to standard stripping if no braces are found
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+        
+    if text.endswith("```"):
+        text = text[:-3]
+        
+    return text.strip()
+
 def extract_structured_data(
     document_type: str, 
     raw_ocr_text: str, 
     ocr_words: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], float]:
     """
-    Extracts structured fields using Google Gemini 2.0 Flash.
+    Extracts structured fields using Google Gemini or local Ollama.
     Enforces response schema matching the requested document type.
     Includes retry logic for validation failures.
     
@@ -133,60 +211,117 @@ def extract_structured_data(
         - List of fields: [{"name": str, "value": Any, "ocr_confidence": float, "bbox": List[int]}]
         - Execution OCR word confidence list or metadata.
     """
-    # Verify API key
-    api_key = get_gemini_api_key()
-    if not api_key:
-        raise RuntimeError("Gemini API Key is not configured. Please supply GEMINI_API_KEY.")
-        
-    genai.configure(api_key=api_key)
-    
-    # Define schema class
     schema_class = get_schema_for_doc_type(document_type)
-    
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    
-    # Prompt formulation
-    prompt = (
-        f"You are a structured data extraction agent specializing in Indian documents.\n"
-        f"You will extract information from the following OCR text which includes line markers.\n"
-        f"Format your response as a JSON object adhering exactly to the schema provided.\n"
-        f"Extract values accurately. If a field cannot be found in the text, return null. "
-        f"Do not invent or hallucinate values.\n\n"
-        f"Raw OCR Text:\n"
-        f"{raw_ocr_text}\n"
-    )
-    
-    generation_config = genai.types.GenerationConfig(
-        response_mime_type="application/json",
-        response_schema=schema_class,
-        temperature=0.1
-    )
-    
     parsed_data = None
     
-    try:
-        logger.info(f"Calling Gemini API for document_type={document_type}")
-        response = model.generate_content(prompt, generation_config=generation_config)
-        parsed_data = schema_class.model_validate_json(response.text)
-        logger.info("Successfully extracted and parsed JSON matching Pydantic schema on attempt 1.")
-    except Exception as e:
-        logger.warning(f"Initial Gemini extraction or parsing failed: {e}. Retrying with error correction...")
+    if settings.LLM_PROVIDER == "ollama":
+        import requests
         
-        # Retry with feedback
-        retry_prompt = (
-            f"You previously generated an extraction that failed validation or parsing with the following error:\n"
-            f"{str(e)}\n\n"
-            f"Here is the source OCR text again:\n"
+        # Format the schema description as JSON schema to feed to Ollama
+        schema_desc = json.dumps(schema_class.model_json_schema(), indent=2)
+        
+        prompt = (
+            f"You are a structured data extraction agent specializing in Indian documents.\n"
+            f"Extract information from the OCR text below into a JSON object matching this schema:\n"
+            f"{schema_desc}\n\n"
+            f"Raw OCR Text:\n"
             f"{raw_ocr_text}\n\n"
-            f"Please correct the error, extract the fields and output valid JSON matching the schema correctly."
+            f"Extract values accurately. If a field cannot be found, return null.\n"
+            f"Return ONLY a raw JSON object matching the schema. Do not include markdown formatting or explanations."
         )
+        
+        url = f"{settings.OLLAMA_API_URL.rstrip('/')}/api/generate"
+        payload = {
+            "model": settings.OLLAMA_MODEL,
+            "prompt": prompt,
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": 0.1
+            }
+        }
+        
         try:
-            response = model.generate_content(retry_prompt, generation_config=generation_config)
-            parsed_data = schema_class.model_validate_json(response.text)
-            logger.info("Successfully extracted and validated JSON on attempt 2.")
-        except Exception as retry_err:
-            logger.error(f"Gemini extraction retry failed: {retry_err}")
-            raise RuntimeError(f"Generative AI extraction failed: {retry_err}")
+            logger.info(f"Calling Ollama API ({settings.OLLAMA_MODEL}) at {url}")
+            res = requests.post(url, json=payload, timeout=60)
+            res.raise_for_status()
+            response_text = res.json()["response"]
+            parsed_data = schema_class.model_validate_json(clean_llm_json_response(response_text))
+            logger.info("Successfully extracted and validated JSON matching Pydantic schema using Ollama on attempt 1.")
+        except Exception as e:
+            logger.warning(f"Initial Ollama extraction or parsing failed: {e}. Retrying with error correction...")
+            
+            # Retry with feedback
+            retry_prompt = (
+                f"You generated JSON that failed Pydantic validation with this error:\n"
+                f"{str(e)}\n\n"
+                f"Please correct the output, here is the source OCR text again:\n"
+                f"{raw_ocr_text}\n\n"
+                f"And here is the JSON schema:\n"
+                f"{schema_desc}\n\n"
+                f"Return only valid JSON matching the schema."
+            )
+            payload["prompt"] = retry_prompt
+            try:
+                res = requests.post(url, json=payload, timeout=60)
+                res.raise_for_status()
+                response_text = res.json()["response"]
+                parsed_data = schema_class.model_validate_json(clean_llm_json_response(response_text))
+                logger.info("Successfully extracted and validated JSON matching Pydantic schema using Ollama on attempt 2.")
+            except Exception as retry_err:
+                logger.error(f"Ollama extraction retry failed: {retry_err}")
+                raise RuntimeError(f"Ollama local extraction failed: {retry_err}")
+    else:
+        # Verify API key
+        api_key = get_gemini_api_key()
+        if not api_key:
+            raise RuntimeError("Gemini API Key is not configured. Please supply GEMINI_API_KEY.")
+            
+        genai.configure(api_key=api_key)
+        gemini_schema = clean_pydantic_schema_for_gemini(schema_class)
+        
+        model = genai.GenerativeModel(settings.GEMINI_MODEL)
+        
+        # Prompt formulation
+        prompt = (
+            f"You are a structured data extraction agent specializing in Indian documents.\n"
+            f"You will extract information from the following OCR text which includes line markers.\n"
+            f"Format your response as a JSON object adhering exactly to the schema provided.\n"
+            f"Extract values accurately. If a field cannot be found in the text, return null. "
+            f"Do not invent or hallucinate values.\n\n"
+            f"Raw OCR Text:\n"
+            f"{raw_ocr_text}\n"
+        )
+        
+        generation_config = genai.types.GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=gemini_schema,
+            temperature=0.1
+        )
+        
+        try:
+            logger.info(f"Calling Gemini API for document_type={document_type}")
+            response = model.generate_content(prompt, generation_config=generation_config)
+            parsed_data = schema_class.model_validate_json(clean_llm_json_response(response.text))
+            logger.info("Successfully extracted and parsed JSON matching Pydantic schema on attempt 1.")
+        except Exception as e:
+            logger.warning(f"Initial Gemini extraction or parsing failed: {e}. Retrying with error correction...")
+            
+            # Retry with feedback
+            retry_prompt = (
+                f"You previously generated an extraction that failed validation or parsing with the following error:\n"
+                f"{str(e)}\n\n"
+                f"Here is the source OCR text again:\n"
+                f"{raw_ocr_text}\n\n"
+                f"Please correct the error, extract the fields and output valid JSON matching the schema correctly."
+            )
+            try:
+                response = model.generate_content(retry_prompt, generation_config=generation_config)
+                parsed_data = schema_class.model_validate_json(clean_llm_json_response(response.text))
+                logger.info("Successfully extracted and validated JSON on attempt 2.")
+            except Exception as retry_err:
+                logger.error(f"Gemini extraction retry failed: {retry_err}")
+                raise RuntimeError(f"Generative AI extraction failed: {retry_err}")
             
     # Flatten parsed schema
     flat_extracted = flatten_pydantic_model(parsed_data)

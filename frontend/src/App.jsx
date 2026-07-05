@@ -95,8 +95,15 @@ export default function App() {
     } catch (err) {
       // Clear timers
       timers.forEach(t => clearTimeout(t));
-      
-      const errMsg = err.response?.data?.detail || "An unexpected error occurred during extraction.";
+
+      let errMsg = "An unexpected error occurred during extraction.";
+      if (err.response?.data?.detail) {
+        errMsg = err.response.data.detail;
+      } else if (err.message === "Network Error") {
+        errMsg = "Could not connect to the backend server. Please verify the FastAPI backend is running at http://localhost:8000 and that local AWS/Gemini environment keys are loaded.";
+      } else if (err.message) {
+        errMsg = err.message;
+      }
       setPipelineStage("error");
       setPipelineError(errMsg);
     } finally {

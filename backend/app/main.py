@@ -26,11 +26,9 @@ app = FastAPI(
 
 # CORS Configuration
 allowed_origins = [settings.ALLOWED_ORIGIN]
-if "http://localhost:5173" not in allowed_origins:
-    allowed_origins.append("http://localhost:5173")
-# Also allow http://localhost:3000 just in case
-if "http://localhost:3000" not in allowed_origins:
-    allowed_origins.append("http://localhost:3000")
+for origin in ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"]:
+    if origin not in allowed_origins:
+        allowed_origins.append(origin)
 
 app.add_middleware(
     CORSMiddleware,

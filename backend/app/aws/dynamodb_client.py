@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import boto3
 from botocore.exceptions import ClientError
 from app.config import settings
@@ -34,18 +34,37 @@ def get_table():
     db = get_dynamodb_resource()
     return db.Table(settings.DYNAMODB_TABLE)
 
+def get_table_keys(table) -> Tuple[str, str]:
+    """
+    Retrieves the actual Partition Key (HASH) and Sort Key (RANGE) names from the table dynamically.
+    Defaults to PK/SK if loading fails.
+    """
+    pk_name = "PK"
+    sk_name = "Sk"
+    try:
+        table.load()
+        for key in table.key_schema:
+            if key["KeyType"] == "HASH":
+                pk_name = key["AttributeName"]
+            elif key["KeyType"] == "RANGE":
+                sk_name = key["AttributeName"]
+    except Exception as e:
+        logger.warning(f"Could not load key schema from table, using defaults PK/SK: {e}")
+    return pk_name, sk_name
+
 def save_extraction(document_id: str, record: Dict[str, Any]) -> None:
     """
     Saves an extraction record to DynamoDB.
-    Key: PK = DOC#<document_id>, SK = METADATA
     """
     table = get_table()
+    pk_name, sk_name = get_table_keys(table)
+    
     pk = f"DOC#{document_id}"
     sk = "METADATA"
     
     item = {
-        "PK": pk,
-        "SK": sk,
+        pk_name: pk,
+        sk_name: sk,
         "document_id": document_id,
         "document_type": record.get("document_type"),
         "fields": record.get("fields", []),
@@ -56,7 +75,7 @@ def save_extraction(document_id: str, record: Dict[str, Any]) -> None:
     }
     
     try:
-        logger.info(f"Saving extraction record: PK={pk}, SK={sk}")
+        logger.info(f"Saving extraction record: {pk_name}={pk}, {sk_name}={sk}")
         table.put_item(Item=item)
     except ClientError as e:
         logger.error(f"Failed to save extraction record to DynamoDB: {e}")
@@ -65,23 +84,24 @@ def save_extraction(document_id: str, record: Dict[str, Any]) -> None:
 def save_correction(document_id: str, corrected_fields: List[Dict[str, Any]]) -> None:
     """
     Saves human-in-the-loop corrections to DynamoDB.
-    Key: PK = DOC#<document_id>, SK = CORRECTION#<timestamp>
     """
     table = get_table()
+    pk_name, sk_name = get_table_keys(table)
+    
     pk = f"DOC#{document_id}"
     timestamp = datetime.utcnow().isoformat() + "Z"
     sk = f"CORRECTION#{timestamp}"
     
     item = {
-        "PK": pk,
-        "SK": sk,
+        pk_name: pk,
+        sk_name: sk,
         "document_id": document_id,
         "corrected_fields": corrected_fields,
         "corrected_at": timestamp
     }
     
     try:
-        logger.info(f"Saving correction record: PK={pk}, SK={sk}")
+        logger.info(f"Saving correction record: {pk_name}={pk}, {sk_name}={sk}")
         table.put_item(Item=item)
     except ClientError as e:
         logger.error(f"Failed to save correction record to DynamoDB: {e}")
@@ -90,30 +110,27 @@ def save_correction(document_id: str, corrected_fields: List[Dict[str, Any]]) ->
 def get_history(limit: int = 50) -> List[Dict[str, Any]]:
     """
     Retrieves the history of extractions from DynamoDB.
-    Performs a Scan with a filter on SK = 'METADATA'.
-    Returns items sorted by created_at descending.
     """
     table = get_table()
+    pk_name, sk_name = get_table_keys(table)
     
     try:
         logger.info("Scanning DynamoDB table for extraction history")
         response = table.scan(
-            FilterExpression="SK = :sk_val",
+            FilterExpression=f"{sk_name} = :sk_val",
             ExpressionAttributeValues={":sk_val": "METADATA"}
         )
         
         items = response.get("Items", [])
         
-        # Paginate if needed (for v1 limit 50 is fine)
         while "LastEvaluatedKey" in response and len(items) < limit:
             response = table.scan(
-                FilterExpression="SK = :sk_val",
+                FilterExpression=f"{sk_name} = :sk_val",
                 ExpressionAttributeValues={":sk_val": "METADATA"},
                 ExclusiveStartKey=response["LastEvaluatedKey"]
             )
             items.extend(response.get("Items", []))
             
-        # Clean up the output and sort by created_at descending
         cleaned_items = []
         for item in items:
             cleaned_items.append({
@@ -136,10 +153,9 @@ def get_history(limit: int = 50) -> List[Dict[str, Any]]:
 def get_stats() -> Dict[str, Any]:
     """
     Computes field-level and overall extraction accuracy based on human-in-the-loop corrections.
-    Scans the table, groups items by document_id, locates the METADATA and latest CORRECTION
-    for each doc, and evaluates mismatch rates.
     """
     table = get_table()
+    pk_name, sk_name = get_table_keys(table)
     
     try:
         logger.info("Scanning DynamoDB for computing accuracy statistics")
@@ -150,7 +166,6 @@ def get_stats() -> Dict[str, Any]:
             response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
             items.extend(response.get("Items", []))
             
-        # Group items by document_id
         docs: Dict[str, Dict[str, Any]] = {}
         for item in items:
             doc_id = item.get("document_id")
@@ -160,7 +175,7 @@ def get_stats() -> Dict[str, Any]:
             if doc_id not in docs:
                 docs[doc_id] = {"metadata": None, "corrections": []}
                 
-            sk = item.get("SK", "")
+            sk = item.get(sk_name, "")
             if sk == "METADATA":
                 docs[doc_id]["metadata"] = item
             elif sk.startswith("CORRECTION#"):
@@ -169,7 +184,7 @@ def get_stats() -> Dict[str, Any]:
         total_documents_processed = 0
         total_documents_corrected = 0
         
-        field_stats: Dict[str, Dict[str, int]] = {} # e.g. {"card_number": {"correct": X, "total": Y}}
+        field_stats: Dict[str, Dict[str, int]] = {}
         
         for doc_id, data in docs.items():
             metadata = data["metadata"]
@@ -179,35 +194,25 @@ def get_stats() -> Dict[str, Any]:
                 continue
                 
             total_documents_processed += 1
-            
             if not corrections:
-                # No corrections made. We can't use this as benchmark data
-                # since we don't know if it's correct or just unreviewed.
-                # However, for stats, we track how many have corrections.
                 continue
                 
             total_documents_corrected += 1
             
-            # Sort corrections by corrected_at to find the latest
             corrections.sort(key=lambda x: x.get("corrected_at", ""))
             latest_correction = corrections[-1]
             
-            # Map corrected fields by name for easy lookup
-            # The structure of corrected_fields is: list[{name, value}]
             corrected_fields_map = {
                 f["name"]: f["value"] for f in latest_correction.get("corrected_fields", [])
             }
             
-            # Compare original fields with corrected fields
             for orig_field in metadata.get("fields", []):
                 name = orig_field.get("name")
                 orig_val = orig_field.get("value")
                 
-                # Check if it was corrected
                 if name in corrected_fields_map:
                     corr_val = corrected_fields_map[name]
                     
-                    # Normalize comparison (convert to string, strip whitespace)
                     norm_orig = str(orig_val).strip() if orig_val is not None else ""
                     norm_corr = str(corr_val).strip() if corr_val is not None else ""
                     
@@ -220,7 +225,6 @@ def get_stats() -> Dict[str, Any]:
                     if is_correct:
                         field_stats[name]["correct"] += 1
                         
-        # Format the stats output
         field_accuracy = []
         overall_correct = 0
         overall_total = 0

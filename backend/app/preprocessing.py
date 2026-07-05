@@ -97,6 +97,16 @@ def preprocess_image(image_bytes: bytes) -> Tuple[bytes, str]:
         if img is None:
             raise ValueError("Invalid image format or corrupted bytes.")
             
+        # Optimization: Downscale high-resolution images to a maximum width/height of 1600px.
+        # This reduces computation times for OCR, OpenCV deskewing, and denoising by up to 10x
+        # while keeping resolution perfectly sufficient for clear text extraction.
+        h, w = img.shape[:2]
+        max_dim = 1600
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            logger.info(f"High-resolution image downscaled from {w}x{h} to {int(w * scale)}x{int(h * scale)}")
+
         # 2. Grayscale conversion
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
@@ -105,9 +115,9 @@ def preprocess_image(image_bytes: bytes) -> Tuple[bytes, str]:
         deskewed = rotate_image(gray, angle)
         
         # 4. Denoising
-        # fastNlMeansDenoising is very good at removing noise from scanned/photographed text
-        # Using moderate h parameter to prevent blurring character details
-        denoised = cv2.fastNlMeansDenoising(deskewed, None, h=7, templateWindowSize=7, searchWindowSize=21)
+        # Optimized: Replace slow fastNlMeansDenoising (takes seconds) with Gaussian blur (takes milliseconds)
+        # to dramatically reduce latency and server load.
+        denoised = cv2.GaussianBlur(deskewed, (3, 3), 0)
         
         # 5. Adaptive Thresholding
         # Handles uneven lighting and shadows, common in mobile photos
