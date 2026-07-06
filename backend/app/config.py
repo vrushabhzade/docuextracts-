@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     DYNAMODB_TABLE: str = "docuextract-records"
     S3_BUCKET: str = "docuextract-images-bucket-name"
     
+    # Provider Settings ("aws" or "gcp")
+    STORAGE_PROVIDER: str = "aws"
+    DATABASE_PROVIDER: str = "aws"
+    
+    # GCP Configuration
+    GCP_PROJECT: Optional[str] = None
+    GCS_BUCKET: str = "docuextract-files"
+    BIGQUERY_DATASET: str = "docuextract_dataset"
+    BIGQUERY_TABLE: str = "docuextract_records"
+    GCP_CREDENTIALS_JSON: Optional[str] = None
+
     # AWS Credentials overrides for local development or explicit credentials
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None

@@ -32,3 +32,8 @@ frontend/yarn-error.log*
 *.sw?
 .DS_Store
 Thumbs.db
+
+# GCP Mocks
+backend/.gcp_bigquery_mock.db
+backend/.gcp_storage_mock/
+

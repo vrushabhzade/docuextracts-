@@ -10,8 +10,8 @@ from app.preprocessing import preprocess_image
 from app.ocr import perform_ocr
 from app.extraction import extract_structured_data
 from app.validation import validate_and_enrich_fields
-from app.aws.s3_client import upload_image, generate_presigned_url
-from app.aws.dynamodb_client import save_extraction, save_correction, get_history, get_stats
+from app.storage import upload_image, generate_presigned_url
+from app.database import save_extraction, save_correction, get_history, get_stats
 from app.models import (
     ExtractionResponse,
     CorrectionRequest,
@@ -54,7 +54,12 @@ async def startup_event():
 @app.get("/health")
 def health_check():
     """Simple health check endpoint."""
-    return {"status": "healthy", "environment": settings.ENVIRONMENT}
+    return {
+        "status": "healthy",
+        "environment": settings.ENVIRONMENT,
+        "storage_provider": settings.STORAGE_PROVIDER,
+        "database_provider": settings.DATABASE_PROVIDER
+    }
 
 @app.post("/api/extract", response_model=ExtractionResponse)
 async def extract_document(

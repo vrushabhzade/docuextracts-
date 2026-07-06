@@ -61,11 +61,29 @@ export default function App() {
     }
   };
 
+  // Health check state
+  const [healthData, setHealthData] = useState({
+    status: "unknown",
+    environment: "local",
+    storage_provider: "aws",
+    database_provider: "aws"
+  });
+
   // Initial fetch on mount
   useEffect(() => {
+    fetchHealth();
     fetchHistory();
     fetchStats();
   }, []);
+
+  const fetchHealth = async () => {
+    try {
+      const res = await apiClient.get("/health");
+      setHealthData(res.data);
+    } catch (err) {
+      console.error("Health check failed:", err);
+    }
+  };
 
   const fetchHistory = async () => {
     try {
@@ -182,12 +200,14 @@ export default function App() {
                   v1.0.0
                 </span>
               </h1>
-              <p className="text-xs text-slate-500">AWS-Native Structured Document Data Extraction</p>
+              <p className="text-xs text-slate-500">
+                {healthData.storage_provider?.toUpperCase() === "GCP" ? "GCP Cloud-Native" : "AWS-Native"} Structured Document Data Extraction
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-slate-400 font-semibold bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-850">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            AWS ECS Fargate Connected
+            {healthData.storage_provider?.toUpperCase() === "GCP" ? "Google Cloud Platform" : "AWS ECS Fargate"} Connected
           </div>
         </div>
       </header>
