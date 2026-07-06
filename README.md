@@ -12,7 +12,7 @@ DocuExtract is a portfolio-grade, AWS-native web application that extracts clean
 - **Rule-based validation** — Verhoeff checksum for ration card numbers, format checks for roll numbers and dates, plus a confidence badge (high / medium / low) per field.
 - **Semantic knowledge graph** — [Cognee](https://github.com/topoteretes/cognee) ingests every extraction in the background and powers natural-language search across the full record history.
 - **Human-in-the-loop corrections** — Editable field cards with bounding-box highlights overlaid on the original image.
-- **AWS-native storage** — S3 for original + preprocessed images, DynamoDB single-table design for records and corrections.
+- **Cloud-agnostic storage & database layers** — Supports AWS (S3 + DynamoDB single-table design) and GCP (Google Cloud Storage + BigQuery) with automatic local filesystem/SQLite mock fallbacks.
 
 ---
 
@@ -77,7 +77,7 @@ DocuExtract is a portfolio-grade, AWS-native web application that extracts clean
 | Image processing | OpenCV (headless), NumPy                                          |
 | Extraction LLM   | Google Gemini 2.0 Flash (JSON-mode), or local Ollama              |
 | Knowledge graph  | Cognee + FastEmbed (BAAI/bge-small-en-v1.5)                       |
-| Storage          | AWS S3 (images), AWS DynamoDB (records + corrections)             |
+| Storage          | AWS S3 (images), AWS DynamoDB (records + corrections) or GCP GCS + BigQuery |
 | Hosting          | AWS ECS Fargate (backend), AWS Amplify / Vercel (frontend)        |
 
 ---
@@ -96,9 +96,12 @@ Docuextracts/
 │   │   ├── extraction.py           # Gemini / Ollama extraction
 │   │   ├── validation.py           # Verhoeff + format checks
 │   │   ├── cognee_integration.py   # Knowledge-graph ingestion & search
+│   │   ├── storage.py              # Cloud-agnostic storage router
+│   │   ├── database.py             # Cloud-agnostic database router
 │   │   ├── schemas/                # Per-document-type field schemas
-│   │   └── aws/                    # S3 + DynamoDB + Secrets clients
-│   ├── tests/                      # pytest suite (moto-backed)
+│   │   ├── aws/                    # S3 + DynamoDB + Secrets clients
+│   │   └── gcp/                    # Google Cloud Storage + BigQuery clients & mocks
+│   ├── tests/                      # pytest suite (moto- and mock-backed)
 │   ├── Dockerfile                  # Tesseract + OpenCV + Python image
 │   └── requirements.txt
 ├── frontend/
@@ -186,6 +189,13 @@ The web UI will be available at `http://localhost:5173`.
 | `S3_BUCKET`               | No       | `docuextract-images-bucket-name` | S3 bucket for original + preprocessed images.       |
 | `AWS_ENDPOINT_URL`        | No       | —                           | Override for LocalStack / custom endpoints.              |
 | `DYNAMODB_ENDPOINT_URL`   | No       | —                           | Override for local DynamoDB.                             |
+| `STORAGE_PROVIDER`        | No       | `aws`                       | Active storage provider: `aws` or `gcp`.                  |
+| `DATABASE_PROVIDER`       | No       | `aws`                       | Active database provider: `aws` or `gcp`.                 |
+| `GCP_PROJECT`             | If GCP   | —                           | Google Cloud Project ID.                                 |
+| `GCS_BUCKET`              | If GCP   | `docuextract-files`         | Google Cloud Storage bucket for document images.          |
+| `BIGQUERY_DATASET`        | If GCP   | `docuextract_dataset`       | BigQuery dataset name.                                   |
+| `BIGQUERY_TABLE`          | If GCP   | `docuextract_records`       | BigQuery table name.                                     |
+| `GCP_CREDENTIALS_JSON`    | No       | —                           | Local path to GCP service account credentials file, or raw JSON string content. |
 
 ### Frontend (`frontend/.env.local`)
 | Variable             | Default                    | Description                                                |
